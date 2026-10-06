@@ -28,10 +28,7 @@ sources:
     resource: repo://test/agent/bob.test.ts
   - id: openwiki-source-21fe6d4741a8225393c37599
     resource: repo://test/agent/create-model.test.ts
-generated: { by: "openwiki/0.5.2", at: "2026-09-23T08:09:37.122Z" }
-verified:
-  - by: openwiki/0.5.2
-    at: 2026-09-23T08:09:37.122Z
+generated: { by: "openwiki/0.6.0", at: "2026-09-25T08:09:49.344Z" }
 ---
 
 # Model Providers and Credentials
@@ -127,6 +124,15 @@ final request boundary to satisfy Bob's two non-standard requirements:
   the environment at call time so a hot-reloaded `.env` value is always used.
 - It sets `User-Agent: ibm-bob-openwiki-provider` (the `BOB_USER_AGENT` constant),
   which Bob's Cloudflare WAF requires to admit the request.
+
+Like Copilot, `bob` is forced onto the streaming HTTP transport:
+`providerUsesStreaming` returns `true` for `bob` because long generations (such as
+planning a large repository) can outlast the Bob endpoint's response timeout when
+sent as a single non-streaming completion, whereas streaming returns output —
+including tool calls — as it is produced. `createModel` applies the same
+conditional `streaming: true` spread it uses for Copilot (described below) rather
+than assigning `streaming: false`, since LangChain turns an explicit `false` into
+`disableStreaming`.
 
 ### ChatGPT OAuth (`openai-chatgpt`)
 
@@ -466,6 +472,6 @@ for the ChatGPT provider — expands the collected `CodexTokens` through
 
 ## Related pages
 
-- [Agent runtime](/openwiki/architecture/agent-runtime.md) — how `createModel` builds and drives the selected provider.
-- [Configuration](/openwiki/operations/configuration.md) — operational configuration and the full env variable surface.
-- [Onboarding](/openwiki/workflows/onboarding.md) — the interactive setup that collects and persists provider credentials.
+- [Agent runtime](../architecture/agent-runtime.md) — how `createModel` builds and drives the selected provider.
+- [Configuration](../operations/configuration.md) — operational configuration and the full env variable surface.
+- [Onboarding](../workflows/onboarding.md) — the interactive setup that collects and persists provider credentials.

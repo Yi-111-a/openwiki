@@ -31,9 +31,6 @@ sources:
   - id: openwiki-source-c6189f89b3f67d0cbf87739f
     resource: repo://src/ingestion/ingestion.ts
 generated: { by: "openwiki/0.5.2", at: "2026-09-23T08:09:37.122Z" }
-verified:
-  - by: openwiki/0.5.2
-    at: 2026-09-23T08:09:37.122Z
 ---
 
 # Code vs Personal Modes
@@ -218,7 +215,7 @@ whichever home directory is in effect.
 
 ## Related pages
 
-- [Architecture overview](/openwiki/architecture/overview.md)
-- [Configuration](/openwiki/operations/configuration.md)
-- [Personal ingestion workflow](/openwiki/workflows/personal-ingestion.md)
-- [Repository generation workflow](/openwiki/workflows/repository-generation.md)
+- [Architecture overview](../architecture/overview.md)
+- [Configuration](../operations/configuration.md)
+- [Personal ingestion workflow](../workflows/personal-ingestion.md)
+- [Repository generation workflow](../workflows/repository-generation.md)

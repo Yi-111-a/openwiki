@@ -35,10 +35,7 @@ sources:
     resource: repo://src/scheduling/schedules.ts
   - id: openwiki-source-7cf549510278a62e11ae8280
     resource: repo://test/scheduling/schedules.test.ts
-generated: { by: "openwiki/0.5.2", at: "2026-09-23T08:09:37.122Z" }
-verified:
-  - by: openwiki/0.5.2
-    at: 2026-09-23T08:09:37.122Z
+generated: { by: "openwiki/0.6.1", at: "2026-09-30T08:10:27.967Z" }
 ---
 
 # CI Scheduling and Self-Update
@@ -58,11 +55,11 @@ Both surfaces share the same cron parsing and validation code in
 lifecycle of a native schedule, and what the CI example files do.
 
 For the CLI surface that drives these flows see
-[CLI reference](/openwiki/operations/cli-reference.md); for what
+[CLI reference](./cli-reference.md); for what
 `code --update` actually regenerates see
-[repository generation](/openwiki/workflows/repository-generation.md); and for
+[repository generation](../workflows/repository-generation.md); and for
 the ingestion side used by native schedules see
-[personal ingestion](/openwiki/workflows/personal-ingestion.md).
+[personal ingestion](../workflows/personal-ingestion.md).
 
 ## Cron parsing and validation
 
@@ -319,6 +316,15 @@ regenerates that file from an internal template and would otherwise drop the
 fork guard; the discard runs `if: ${{ !cancelled() }}` so the guard survives
 whether the run succeeded or failed.
 
+The dogfood run is currently configured for OpenRouter with the model
+`z-ai/glm-5.2` (`OPENWIKI_PROVIDER: openrouter`, `OPENWIKI_MODEL_ID:
+z-ai/glm-5.2`, keyed by `OPENROUTER_API_KEY`). The workflow file documents a
+GitHub Copilot alternative in comments: set the `COPILOT_API_KEY` repository
+secret (a GitHub OAuth token) and switch to `OPENWIKI_PROVIDER: copilot` with
+`OPENWIKI_MODEL_ID: claude-sonnet-5`. The published-package examples use the
+same OpenRouter/GLM defaults, so external repositories can keep them or
+substitute their own provider and model.
+
 ### Ephemeral-runner resume caveat
 
 Repository generation and update are resumable: OpenWiki records in-progress work
@@ -332,9 +338,9 @@ plus full git history, as the only durable state carried between runs.
 
 ## Related pages
 
-- [CLI reference](/openwiki/operations/cli-reference.md) — the `cron`, `ingest`,
+- [CLI reference](./cli-reference.md) — the `cron`, `ingest`,
   and `code --update` commands invoked by these schedules.
-- [Repository generation](/openwiki/workflows/repository-generation.md) — what
+- [Repository generation](../workflows/repository-generation.md) — what
   `code --update` regenerates and its resumable page-job architecture.
-- [Personal ingestion](/openwiki/workflows/personal-ingestion.md) — the
+- [Personal ingestion](../workflows/personal-ingestion.md) — the
   ingestion run that native macOS schedules trigger.
