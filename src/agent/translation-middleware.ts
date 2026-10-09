@@ -39,6 +39,31 @@ const NOSTREAM_TAG = "langsmith:nostream";
 const TRANSLATION_STATUS_MESSAGE = "Translating wiki docs...";
 
 /**
+ * Stop reasons that mean the provider cut the response at its output-token limit
+ * instead of finishing the page.
+ *
+ * LangChain normalizes most providers to `length` when it merges a streaming
+ * response, but this middleware calls `invoke()` without streaming, where
+ * `response_metadata` keeps each provider's own spelling, so every known spelling
+ * is listed: `length` (OpenAI, Gemini, Anthropic streaming), `max_tokens`
+ * (Anthropic, OpenAI completions), `MAX_TOKENS` (Bedrock), and
+ * `max_output_tokens` (the OpenAI Responses API, reported under
+ * `incomplete_details` rather than as the stop reason).
+ */
+const OUTPUT_LIMIT_STOP_REASONS = new Set([
+  "length",
+  "max_token",
+  "max_tokens",
+  "max_output_tokens",
+]);
+
+/**
+ * `response_metadata` entries that carry the stop reason in a nested `reason`
+ * field rather than as the value itself.
+ */
+const NESTED_STOP_REASON_KEYS = ["incomplete_details"] as const;
+
+/**
  * What an `update` run should do about the wiki's language before the agent
  * runs.
  *
@@ -326,6 +351,11 @@ async function markPending(
  * the agent's `messages` stream: the translated Markdown is written back through
  * the backend rather than streamed to the TUI token by token.
  *
+ * A response the provider stopped at its output-token limit throws like an
+ * empty one, so the caller keeps the page and stamps it for retry. Writing the
+ * partial text would silently drop everything after the cut-off point, and the
+ * personal wiki is usually not under git, so the loss is unrecoverable.
+ *
  * @param model - Translation model.
  * @param content - Markdown to translate.
  * @param from - Expected source language.
@@ -345,7 +375,45 @@ async function translateMarkdown(
     ],
     { tags: [NOSTREAM_TAG] },
   );
+  if (isOutputTruncated(response.response_metadata)) {
+    throw new Error("the model stopped at its output-token limit");
+  }
   return extractText(response.content);
+}
+
+/**
+ * Whether a response metadata reports that the provider stopped at its
+ * output-token limit, leaving the response text incomplete.
+ *
+ * Providers spell the stop reason differently and some nest it, so every known
+ * key and value is checked; anything unrecognized, including a model that
+ * reports no metadata at all, is treated as complete, which is the status quo
+ * behavior for a response that finished normally.
+ *
+ * @param metadata - `response_metadata` of the model's reply, if it has any.
+ */
+function isOutputTruncated(
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  if (!metadata) return false;
+  const reasons: unknown[] = [
+    metadata.finish_reason,
+    metadata.stop_reason,
+    metadata.finishReason,
+    metadata.stopReason,
+  ];
+  for (const key of NESTED_STOP_REASON_KEYS) {
+    const nested = metadata[key];
+    if (nested && typeof nested === "object") {
+      const { reason } = nested as { reason?: unknown };
+      reasons.push(reason);
+    }
+  }
+  return reasons.some(
+    (reason) =>
+      typeof reason === "string" &&
+      OUTPUT_LIMIT_STOP_REASONS.has(reason.toLowerCase()),
+  );
 }
 
 /**

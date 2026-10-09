@@ -47,6 +47,20 @@ function fakeModel(translate: (content: string) => string) {
   return { model: model as unknown as BaseChatModel, calls };
 }
 
+/**
+ * A model that replies with fixed `text` plus the given `response_metadata`,
+ * standing in for a provider that stopped early, without any network access.
+ */
+function scriptedModel(
+  text: string,
+  responseMetadata: Record<string, unknown>,
+): BaseChatModel {
+  const reply = new AIMessage(text);
+  reply.response_metadata = responseMetadata;
+  const model = { invoke: () => Promise.resolve(reply) };
+  return model as unknown as BaseChatModel;
+}
+
 async function setup(outputMode: "local-wiki" | "repository" = "repository") {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "openwiki-translate-"));
   const backend = new OpenWikiLocalShellBackend({
@@ -618,6 +632,106 @@ describe("createWikiTranslationMiddleware beforeAgent", () => {
     expect(after).toContain("# Page");
     expect(warnings[0]).toContain("empty translation");
   });
+
+  test("stamps a page for retry when the translation stopped at the output limit", async () => {
+    const { backend, rootDir } = await setup();
+    await backend.write(
+      "/openwiki/page.md",
+      "# Page\n\nFirst section.\n\n## Details\n\nSecond section.\n",
+    );
+
+    const warnings: string[] = [];
+    // A response cut off by the output-token limit still carries text, so only
+    // the stop reason reveals that writing it would drop the rest of the page.
+    const model = scriptedModel("# 页面\n\n第一部分。\n", {
+      finish_reason: "length",
+    });
+    await runBeforeAgent(
+      createWikiTranslationMiddleware(
+        backend,
+        "repository",
+        model,
+        switchTo("zh-CN"),
+        (message) => warnings.push(message),
+      ),
+    );
+
+    const after = await readFile(
+      path.join(rootDir, "openwiki/page.md"),
+      "utf8",
+    );
+    expect(after).toContain('openwiki_translation_pending: "zh-CN"');
+    expect(after).toContain("Second section.");
+    expect(after).not.toContain("页面");
+    expect(warnings[0]).toContain("output-token limit");
+  });
+
+  test.each([
+    ["anthropic stop_reason", { stop_reason: "max_tokens" }],
+    ["bedrock finishReason", { finishReason: "MAX_TOKENS" }],
+    [
+      "openai responses incomplete_details",
+      { incomplete_details: { reason: "max_output_tokens" } },
+    ],
+    ["normalized google finishReason", { finish_reason: "length" }],
+  ])(
+    "treats a %s response as truncated",
+    async (_name: string, responseMetadata: Record<string, unknown>) => {
+      const { backend, rootDir } = await setup();
+      await backend.write("/openwiki/page.md", "# Page\n\nBody.\n");
+
+      const warnings: string[] = [];
+      const model = scriptedModel("# 页面\n\n内容。\n", responseMetadata);
+      await runBeforeAgent(
+        createWikiTranslationMiddleware(
+          backend,
+          "repository",
+          model,
+          switchTo("zh-CN"),
+          (message) => warnings.push(message),
+        ),
+      );
+
+      const after = await readFile(
+        path.join(rootDir, "openwiki/page.md"),
+        "utf8",
+      );
+      expect(after).toContain('openwiki_translation_pending: "zh-CN"');
+      expect(after).toContain("# Page");
+      expect(warnings[0]).toContain("output-token limit");
+    },
+  );
+
+  test.each([
+    ["openai", { finish_reason: "stop" }],
+    ["anthropic", { stop_reason: "end_turn" }],
+    ["google", { finish_reason: "safety" }],
+  ])(
+    "writes a complete %s translation",
+    async (_name: string, responseMetadata: Record<string, unknown>) => {
+      const { backend, rootDir } = await setup();
+      await backend.write("/openwiki/page.md", "# Page\n\nBody.\n");
+
+      const warnings: string[] = [];
+      const model = scriptedModel("# 页面\n\n内容。\n", responseMetadata);
+      await runBeforeAgent(
+        createWikiTranslationMiddleware(
+          backend,
+          "repository",
+          model,
+          switchTo("zh-CN"),
+          (message) => warnings.push(message),
+        ),
+      );
+
+      const after = await readFile(
+        path.join(rootDir, "openwiki/page.md"),
+        "utf8",
+      );
+      expect(after).toBe("# 页面\n\n内容。\n");
+      expect(warnings).toHaveLength(0);
+    },
+  );
 
   test("does not rewrite the pending marker when it already matches", async () => {
     const { backend, rootDir } = await setup();
