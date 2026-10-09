@@ -808,6 +808,13 @@ function headingSections(tokens: Token[]): ParsedHeadingSection[] {
     const base = headingSlug(heading);
     let anchor = base;
     let suffix = suffixes.get(base) ?? 0;
+    if (base === "") {
+      // A heading built only from emoji or punctuation slugs to the empty string, and an
+      // empty anchor is not a readable section reference, so number it like a duplicate
+      // from the very first one rather than emitting a bare trailing `#`.
+      suffix += 1;
+      anchor = `${base}-${suffix}`;
+    }
     while (taken.has(anchor)) {
       suffix += 1;
       anchor = `${base}-${suffix}`;

@@ -465,6 +465,48 @@ describe("repository wiki retrieval", () => {
     ]);
   });
 
+  test("symbol-only headings stay readable instead of producing an empty anchor", async () => {
+    const root = await createRoot();
+    await writeFile(
+      path.join(root, "openwiki/architecture/launch.md"),
+      page({
+        title: "Launch Plan",
+        description: "Symbol-only heading behavior.",
+        source: "src/launch.ts",
+        body: [
+          "## 🚀",
+          "",
+          "The launch plan keeps the ZEBRAFISH release checklist.",
+          "",
+          "## ⚠️",
+          "",
+          "The rollback section documents the ZEBRAFISH go/no-go call.",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+
+    const result = requireSearchResults(
+      await searchWiki(root, { query: "ZEBRAFISH", limit: 2 }),
+    );
+    const references = result.results.flatMap((entry) => entry.ref);
+
+    expect(references).toEqual([
+      "openwiki/architecture/launch.md#-1",
+      "openwiki/architecture/launch.md#-2",
+    ]);
+
+    for (const reference of references) {
+      const [pagePath, section] = reference.split("#");
+      const read = await readWikiSections(root, {
+        page: pagePath,
+        sections: [section],
+      });
+      expect(read.sections).toHaveLength(1);
+      expect(read.sections[0]?.content).toContain("ZEBRAFISH");
+    }
+  });
+
   test("linked search spans repositories and identifies results for exact reads", async () => {
     const workspace = await mkdtemp(
       path.join(os.tmpdir(), "openwiki-retrieval-"),
