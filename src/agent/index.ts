@@ -858,7 +858,13 @@ async function createCheckpointer(
     await prepareCheckpointDirectory(target.connString);
   }
 
-  return SqliteSaver.fromConnString(target.connString);
+  const checkpointer = SqliteSaver.fromConnString(target.connString);
+
+  if (target.persistent) {
+    enableCheckpointAutoVacuum(checkpointer);
+  }
+
+  return checkpointer;
 }
 
 async function prepareCheckpointDirectory(filePath: string): Promise<void> {
@@ -868,6 +874,33 @@ async function prepareCheckpointDirectory(filePath: string): Promise<void> {
     mode: 0o700,
   });
   await chmodIfExists(checkpointDir, 0o700);
+}
+
+// A delete hands its pages to sqlite's freelist; the file on disk keeps
+// every byte it ever grew to until somebody shrinks it. Nothing did, so
+// openwiki.sqlite only ever grew (see #1030).
+//
+// `auto_vacuum = INCREMENTAL` makes sqlite keep freed pages on the freelist
+// where `incremental_vacuum` can hand them back, and it is the only mode
+// that gives the space back page by page instead of rewriting the whole
+// file. sqlite only records the choice while the database has no tables,
+// so this has to run before SqliteSaver.setup() creates any — an existing
+// database keeps the mode it was created with.
+export function enableCheckpointAutoVacuum(checkpointer: SqliteSaver): void {
+  checkpointer.db.pragma("auto_vacuum = INCREMENTAL");
+}
+
+// Bounded so a prune on a database that accumulated a very large freelist
+// cannot turn into a long stall at the end of a run; the remainder is
+// reclaimed by the next prune.
+const CHECKPOINT_VACUUM_PAGES = 4096;
+
+function reclaimCheckpointPages(checkpointer: SqliteSaver): void {
+  // exec, not pragma: incremental_vacuum returns no rows and pragma() would
+  // materialize one empty row per reclaimed page. Outside the prune
+  // transaction, because sqlite refuses to vacuum inside one. A no-op on a
+  // database that is not in incremental mode.
+  checkpointer.db.exec(`PRAGMA incremental_vacuum(${CHECKPOINT_VACUUM_PAGES})`);
 }
 
 // SqliteSaver.put() only ever inserts new checkpoint rows; nothing in the
@@ -914,6 +947,7 @@ export function pruneCheckpointHistory(
   });
 
   prune(threadId);
+  reclaimCheckpointPages(checkpointer);
 }
 
 function prunePersistentCheckpointHistory(
