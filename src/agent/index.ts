@@ -860,8 +860,8 @@ async function createCheckpointer(
 
   const checkpointer = SqliteSaver.fromConnString(target.connString);
 
-  if (target.persistent) {
-    enableCheckpointAutoVacuum(checkpointer);
+  if (target.persistent && !enableCheckpointAutoVacuum(checkpointer)) {
+    reportUnvacuumableCheckpointDatabase(target.connString);
   }
 
   return checkpointer;
@@ -884,16 +884,51 @@ async function prepareCheckpointDirectory(filePath: string): Promise<void> {
 // where `incremental_vacuum` can hand them back, and it is the only mode
 // that gives the space back page by page instead of rewriting the whole
 // file. sqlite only records the choice while the database has no tables,
-// so this has to run before SqliteSaver.setup() creates any — an existing
-// database keeps the mode it was created with.
-export function enableCheckpointAutoVacuum(checkpointer: SqliteSaver): void {
+// so this has to run before SqliteSaver.setup() creates any.
+//
+// Returns false when the pragma did not take — a database created before
+// this ran keeps `auto_vacuum = 0`, and on it `incremental_vacuum` is a
+// no-op. Those are exactly the multi-GiB files in #1029, so the caller
+// says so rather than letting the prune look like a fix that worked.
+export function enableCheckpointAutoVacuum(checkpointer: SqliteSaver): boolean {
   checkpointer.db.pragma("auto_vacuum = INCREMENTAL");
+  return isCheckpointAutoVacuumEnabled(checkpointer);
+}
+
+export function isCheckpointAutoVacuumEnabled(
+  checkpointer: SqliteSaver,
+): boolean {
+  return (
+    checkpointer.db.pragma("auto_vacuum", { simple: true }) ===
+    AUTO_VACUUM_INCREMENTAL
+  );
+}
+
+// One-time migration, documented rather than run: switching an existing
+// database to incremental mode requires a VACUUM, which rewrites the whole
+// file and needs disk for a second copy of it. On the 42.55 GB file in
+// #1029 that is a user-visible event and has to be their call, not ours.
+const VACUUM_MIGRATION_HINT =
+  "it was created before openwiki returned freed pages to the database, so prunes cannot shrink it. " +
+  "To reclaim the space once, stop openwiki and run: " +
+  "sqlite3 <path> 'PRAGMA auto_vacuum=INCREMENTAL; VACUUM;' " +
+  "(rewrites the file and needs disk for a second copy while it runs). " +
+  "Until then it keeps its current size.";
+
+function reportUnvacuumableCheckpointDatabase(connString: string): void {
+  process.stderr.write(
+    `! ${connString}: ${VACUUM_MIGRATION_HINT}\n`,
+  );
 }
 
 // Bounded so a prune on a database that accumulated a very large freelist
 // cannot turn into a long stall at the end of a run; the remainder is
 // reclaimed by the next prune.
 const CHECKPOINT_VACUUM_PAGES = 4096;
+
+// PRAGMA auto_vacuum is reported as 0 (none), 1 (full) or 2 (incremental).
+// Only 2 hands pages back through incremental_vacuum.
+const AUTO_VACUUM_INCREMENTAL = 2;
 
 function reclaimCheckpointPages(checkpointer: SqliteSaver): void {
   // exec, not pragma: incremental_vacuum returns no rows and pragma() would

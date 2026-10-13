@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   enableCheckpointAutoVacuum,
+  isCheckpointAutoVacuumEnabled,
   pruneCheckpointHistory,
 } from "../../src/agent/index.ts";
 
@@ -84,6 +85,7 @@ describe("pruneCheckpointHistory", () => {
 
 describe("checkpoint database size", () => {
   const AUTO_VACUUM_INCREMENTAL = 2;
+  const AUTO_VACUUM_NONE = 0;
 
   async function withCheckpointFile(
     run: (filePath: string) => Promise<void>,
@@ -173,6 +175,93 @@ describe("checkpoint database size", () => {
         AUTO_VACUUM_INCREMENTAL,
       );
       reopened.db.close();
+    });
+  });
+
+  // The gap the fresh-database tests above cannot see: a database the old
+  // code created keeps auto_vacuum = 0, because sqlite refuses the change
+  // once there are tables. Those are the files in #1029.
+  test("a database created before this fix reports that the pragma did not take", async () => {
+    await withCheckpointFile(async (filePath) => {
+      const legacy = SqliteSaver.fromConnString(filePath);
+      await legacy.getTuple({
+        configurable: { thread_id: "thread-a", checkpoint_ns: "" },
+      });
+      legacy.db.close();
+
+      const reopened = SqliteSaver.fromConnString(filePath);
+      expect(reopened.db.pragma("auto_vacuum", { simple: true })).toBe(
+        AUTO_VACUUM_NONE,
+      );
+      expect(enableCheckpointAutoVacuum(reopened)).toBe(false);
+      expect(isCheckpointAutoVacuumEnabled(reopened)).toBe(false);
+      reopened.db.close();
+    });
+  });
+
+  // ...and a prune on it reclaims nothing, which is the whole reason the
+  // caller has to say something rather than let the fix read as working.
+  test("a prune on a legacy database leaves its freed pages on the freelist", async () => {
+    await withCheckpointFile(async (filePath) => {
+      const legacy = SqliteSaver.fromConnString(filePath);
+      await legacy.getTuple({
+        configurable: { thread_id: "thread-a", checkpoint_ns: "" },
+      });
+
+      const insertCheckpoint = legacy.db.prepare(
+        `INSERT INTO checkpoints
+           (thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata)
+         VALUES ('thread-a', '', ?, NULL, 'json', ?, '{}')`,
+      );
+      for (let index = 0; index < 50; index += 1) {
+        insertCheckpoint.run(`c${index}`, Buffer.alloc(64 * 1024, index % 251));
+      }
+
+      const pagesBefore = legacy.db.pragma("page_count", { simple: true });
+      pruneCheckpointHistory(legacy, "thread-a");
+
+      // Rows are gone, pages are not: the space is freed to sqlite and
+      // stays with it.
+      expect(
+        legacy.db.prepare("SELECT COUNT(*) AS n FROM checkpoints").get(),
+      ).toEqual({ n: 1 });
+      expect(legacy.db.pragma("freelist_count", { simple: true })).toBeGreaterThan(
+        0,
+      );
+      expect(legacy.db.pragma("page_count", { simple: true })).toBe(
+        pagesBefore,
+      );
+      legacy.db.close();
+    });
+  });
+
+  // The documented one-time migration does convert a legacy file, so the
+  // hint in the warning is not advice we have not checked.
+  test("the documented VACUUM converts a legacy database", async () => {
+    await withCheckpointFile(async (filePath) => {
+      const legacy = SqliteSaver.fromConnString(filePath);
+      await legacy.getTuple({
+        configurable: { thread_id: "thread-a", checkpoint_ns: "" },
+      });
+      const insertCheckpoint = legacy.db.prepare(
+        `INSERT INTO checkpoints
+           (thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata)
+         VALUES ('thread-a', '', ?, NULL, 'json', ?, '{}')`,
+      );
+      for (let index = 0; index < 50; index += 1) {
+        insertCheckpoint.run(`c${index}`, Buffer.alloc(64 * 1024, index % 251));
+      }
+      expect(enableCheckpointAutoVacuum(legacy)).toBe(false);
+
+      legacy.db.exec("PRAGMA auto_vacuum = INCREMENTAL; VACUUM;");
+      expect(isCheckpointAutoVacuumEnabled(legacy)).toBe(true);
+
+      const pagesBefore = legacy.db.pragma("page_count", { simple: true });
+      pruneCheckpointHistory(legacy, "thread-a");
+      expect(legacy.db.pragma("page_count", { simple: true })).toBeLessThan(
+        pagesBefore,
+      );
+      legacy.db.close();
     });
   });
 });
